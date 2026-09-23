@@ -2,8 +2,7 @@ name: Wheel bot
 
 on:
   schedule:
-    # Three runs per weekday (UTC). Summer: 10:45 AM, 1:00 PM, 3:00 PM Eastern.
-    # Winter: 9:45 AM, 12:00 PM, 2:00 PM Eastern.
+    # Summer: 10:45 AM, 1:00 PM, 3:00 PM Eastern. Winter: one hour earlier.
     - cron: "45 14 * * 1-5"
     - cron: "0 17 * * 1-5"
     - cron: "0 19 * * 1-5"
@@ -13,7 +12,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: wheel-bot
+  group: bots-git
   cancel-in-progress: false
 
 jobs:
@@ -35,6 +34,17 @@ jobs:
           DRY_RUN: ${{ vars.DRY_RUN || 'true' }}
           WATCHLIST: ${{ vars.WATCHLIST }}
           SELL_PUTS: ${{ vars.SELL_PUTS || 'true' }}
+          OPTIONS_FEED: ${{ vars.OPTIONS_FEED }}
+        run: python wheel_bot.py
+      - name: Save trade log and state
+        if: always()
+        run: |
+          git config user.name "wheel-bot"
+          git config user.email "wheel-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "Wheel bot run $(date -u +%F-%H%M)" || true
+          git pull --rebase || true
+          git push || true          SELL_PUTS: ${{ vars.SELL_PUTS || 'true' }}
           OPTIONS_FEED: ${{ vars.OPTIONS_FEED }}
         run: python wheel_bot.py
       - name: Save trade log and state
