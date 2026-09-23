@@ -2,18 +2,27 @@ name: Wheel bot
 
 on:
   schedule:
+    # Three runs per weekday (UTC). Summer: 10:45 AM, 1:00 PM, 3:00 PM Eastern.
+    # Winter: 9:45 AM, 12:00 PM, 2:00 PM Eastern.
     - cron: "45 14 * * 1-5"
+    - cron: "0 17 * * 1-5"
+    - cron: "0 19 * * 1-5"
   workflow_dispatch: {}
 
 permissions:
   contents: write
 
+concurrency:
+  group: wheel-bot
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install "alpaca-py>=0.44"
@@ -26,14 +35,16 @@ jobs:
           DRY_RUN: ${{ vars.DRY_RUN || 'true' }}
           WATCHLIST: ${{ vars.WATCHLIST }}
           SELL_PUTS: ${{ vars.SELL_PUTS || 'true' }}
+          OPTIONS_FEED: ${{ vars.OPTIONS_FEED }}
         run: python wheel_bot.py
-      - name: Save trade log
+      - name: Save trade log and state
         if: always()
         run: |
-          if [ -f trades_log.csv ]; then
-            git config user.name "wheel-bot"
-            git config user.email "wheel-bot@users.noreply.github.com"
-            git add trades_log.csv
-            git commit -m "Trade log $(date -u +%F)" || true
+          git config user.name "wheel-bot"
+          git config user.email "wheel-bot@users.noreply.github.com"
+          git add trades_log.csv state.json 2>/dev/null || true
+          git commit -m "Bot run $(date -u +%F-%H%M)" || true
+          git pull --rebase || true
+          git push || true            git commit -m "Trade log $(date -u +%F)" || true
             git push || true
           fi
