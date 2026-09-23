@@ -46,7 +46,7 @@ from zoneinfo import ZoneInfo
 
 from alpaca.data.historical.crypto import CryptoHistoricalDataClient
 from alpaca.data.requests import CryptoBarsRequest, CryptoLatestQuoteRequest
-from alpaca.data.timeframe import TimeFrame
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import LimitOrderRequest
@@ -71,14 +71,30 @@ def env_float(n, d):
 PAPER = env_bool("PAPER", True)
 DRY_RUN = env_bool("DRY_RUN", True)
 BOT_BUDGET = env_float("BOT_BUDGET", 100.0)
-SYMBOLS = [s.strip().upper() for s in (os.getenv("CRYPTO_SYMBOLS") or "BTC/USD,ETH/USD").split(",") if s.strip()]
-FAST, SLOW, TREND = 20, 100, 200         # hourly EMA lengths
-BUFFER = 0.002                            # 0.2% hysteresis around the crossover to cut whipsaws
-ATR_LEN, ATR_MULT = 14, 3.0
-HARD_STOP = 0.06
+RISK = (os.getenv("CRYPTO_RISK") or "normal").strip().lower()   # "normal" or "high"
+HIGH = RISK == "high"
+_default_syms = "BTC/USD,ETH/USD,SOL/USD,DOGE/USD" if HIGH else "BTC/USD,ETH/USD,SOL/USD"
+SYMBOLS = [s.strip().upper() for s in (os.getenv("CRYPTO_SYMBOLS") or _default_syms).split(",") if s.strip()]
+SPEED = (os.getenv("CRYPTO_SPEED") or "normal").strip().lower()  # "normal" (hourly) or "turbo" (15-minute)
+TURBO = SPEED == "turbo"
+if TURBO:
+    # 15-minute bars: 9/21 EMA crossover, trend filter = 24-hour EMA (96 bars)
+    FAST, SLOW, TREND = 9, 21, 96
+    BUFFER = 0.001
+    ATR_MULT = 3.0 if HIGH else 2.5
+    HARD_STOP = 0.08 if HIGH else 0.04
+    MIN_ATR_PCT = 0.0025   # skip dead markets: a 15-min bar must typically move >= 0.25% to have a chance of beating fees
+else:
+    FAST, SLOW, TREND = 20, 100, 200     # hourly EMA lengths
+    BUFFER = 0.002                        # 0.2% hysteresis around the crossover to cut whipsaws
+    ATR_MULT = 4.0 if HIGH else 3.0       # high risk: looser trailing stop, rides bigger swings
+    HARD_STOP = 0.10 if HIGH else 0.06    # high risk: tolerates a 10% drop before bailing
+    MIN_ATR_PCT = 0.0
+ATR_LEN = 14
+ALL_IN = HIGH                             # high risk: first signal gets the whole pot, not a slice
 FEE_EST = 0.0025                          # booked on every fill (Alpaca taker tier 1)
 KILL_SWITCH = 0.30
-COOLDOWN_H = 12                           # no re-entry for 12h after a stop-out
+COOLDOWN_H = 3 if (os.getenv("CRYPTO_SPEED") or "").lower() == "turbo" else 12  # no re-entry after a stop-out
 MIN_ORDER = 5.0
 NOTIFY_EVERY_RUN = env_bool("NOTIFY_EVERY_RUN", False)
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "")
@@ -246,6 +262,14 @@ def place(trading, s, sym, side, qty, quote, urgent, info):
         tif = TimeInForce.GTC
         style = "limit at mid"
     price = round_to(price, info.get("pinc"), up=(side == "buy"))
+    if side == "sell" and not DRY_RUN:
+        try:  # fees can be taken in coins, so never try to sell more than the account holds
+            held = float(trading.get_open_position(sym.replace("/", "")).qty)
+            if held < qty:
+                s["pos"][sym]["qty"] = held
+                qty = held
+        except Exception:
+            pass
     qty = round_to(qty, info.get("qinc"))
     if qty <= 0 or qty * price < 1:
         say(f"{sym}: order too small, skipped.")
@@ -259,7 +283,7 @@ def place(trading, s, sym, side, qty, quote, urgent, info):
             symbol=sym, qty=qty, side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
             time_in_force=tif, limit_price=price,
             client_order_id=f"{TAG}-{sym.replace('/', '')}-{datetime.now().strftime('%H%M%S%f')}"))
-        s["orders"][sym] = {"id": str(o.id), "side": side, "qty": qty, "booked": 0.0}
+        s["orders"][sym] = {"id": str(o.id), "side": side, "qty": qty, "booked": 0.0, "notional": qty * price}
         if tif == TimeInForce.IOC:
             _time.sleep(3)
             settle_orders(trading, s)
@@ -278,13 +302,15 @@ def run(trading, cdata):
 
 def _run(trading, cdata, s):
     now = datetime.now(ET)
-    say(f"{'PAPER' if PAPER else 'REAL MONEY'} | {'DRY RUN' if DRY_RUN else 'LIVE ORDERS'} | {now:%a %b %d %I:%M %p} ET")
+    say(f"{'PAPER' if PAPER else 'REAL MONEY'} | {'DRY RUN' if DRY_RUN else 'LIVE ORDERS'} | risk {RISK} | speed {SPEED} | {now:%a %b %d %I:%M %p} ET")
     s.setdefault("orders", {})
     s.setdefault("attempts", {})
     settle_orders(trading, s)
 
-    bars = cdata.get_crypto_bars(CryptoBarsRequest(symbol_or_symbols=SYMBOLS, timeframe=TimeFrame.Hour,
-                                                   start=datetime.now(timezone.utc) - timedelta(days=30)))
+    tf = TimeFrame(15, TimeFrameUnit.Minute) if TURBO else TimeFrame.Hour
+    lookback = timedelta(days=6) if TURBO else timedelta(days=30)
+    bars = cdata.get_crypto_bars(CryptoBarsRequest(symbol_or_symbols=SYMBOLS, timeframe=tf,
+                                                   start=datetime.now(timezone.utc) - lookback))
     quotes = cdata.get_crypto_latest_quote(CryptoLatestQuoteRequest(symbol_or_symbols=SYMBOLS))
 
     info = {}
@@ -306,12 +332,13 @@ def _run(trading, cdata, s):
     if halted:
         alert(f"KILL SWITCH: pot is ${pot:.2f} ({pot / BOT_BUDGET - 1:+.0%}). No new entries.")
 
-    slot = BOT_BUDGET / len(SYMBOLS)
+    slot = BOT_BUDGET if ALL_IN else BOT_BUDGET / len(SYMBOLS)
+    free = s["cash"] - sum(o.get("notional", 0) for o in s["orders"].values() if o.get("side") == "buy")
     for sym in SYMBOLS:
         b = [x for x in bars.data.get(sym, []) if x.close]
         q = quotes.get(sym)
         if len(b) < TREND + 5 or not q or not q.bid_price or not q.ask_price:
-            say(f"{sym}: not enough data yet ({len(b)} hourly bars).")
+            say(f"{sym}: not enough data yet ({len(b)} bars).")
             continue
         if sym in s["orders"]:
             continue
@@ -335,20 +362,22 @@ def _run(trading, cdata, s):
             else:
                 say(f"{sym}: holding, {chg:+.2%} vs entry, stop ${trail:,.0f}")
         else:
-            up = f > sl * (1 + BUFFER) and px > tr
+            up = f > sl * (1 + BUFFER) and px > tr and (a / px) >= MIN_ATR_PCT
             cd = s.get("cooldown", {}).get(sym)
             if up and cd and datetime.fromisoformat(cd) > datetime.now(timezone.utc):
                 say(f"{sym}: signal, but cooling down after a stop until {datetime.fromisoformat(cd).astimezone(ET):%a %I:%M %p} ET.")
             elif up and not halted:
-                amount = min(slot, s["cash"]) * (1 - FEE_EST)
+                amount = min(slot, free) * (1 - FEE_EST)
                 if amount < MIN_ORDER:
-                    say(f"{sym}: signal, but only ${s['cash']:.2f} free in the pot.")
+                    say(f"{sym}: signal, but only ${max(free, 0):.2f} free in the pot.")
                 else:
                     place(trading, s, sym, "buy", amount / q.ask_price, q, False, info[sym])
-                    say("   reason: 20h EMA above 100h EMA and price above 200h EMA")
+                    free -= amount / (1 - FEE_EST)
+                    say(f"   reason: fast EMA({FAST}) above slow EMA({SLOW}) and price above trend EMA({TREND})")
             else:
                 trend = "up" if f > sl else "down"
-                say(f"{sym}: no entry (short-term trend {trend}, {'above' if px > tr else 'below'} 200h EMA)")
+                quiet = ", market too quiet" if MIN_ATR_PCT and (a / px) < MIN_ATR_PCT else ""
+                say(f"{sym}: no entry (short-term trend {trend}, {'above' if px > tr else 'below'} trend EMA{quiet})")
 
     pot = s["cash"] + sum(p["qty"] * marks.get(k, p["entry"]) for k, p in s["pos"].items())
     w, l = s.get("wins", 0), s.get("losses", 0)
