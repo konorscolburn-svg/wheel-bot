@@ -1,0 +1,46 @@
+name: Wheel bot
+
+on:
+  schedule:
+    - cron: "45 14 * * 1-5"
+    - cron: "0 17 * * 1-5"
+    - cron: "0 19 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bots-git
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install "alpaca-py>=0.44"
+      - name: Run bot
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          PAPER: ${{ vars.PAPER || 'true' }}
+          DRY_RUN: ${{ vars.DRY_RUN || 'true' }}
+          WATCHLIST: ${{ vars.WATCHLIST }}
+          SELL_PUTS: ${{ vars.SELL_PUTS || 'true' }}
+          OPTIONS_FEED: ${{ vars.OPTIONS_FEED }}
+        run: python wheel_bot.py
+      - name: Save trade log and state
+        if: always()
+        run: |
+          git config user.name "wheel-bot"
+          git config user.email "wheel-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "Wheel bot run $(date -u +%F-%H%M)" || true
+          git pull --rebase || true
+          git push || true
