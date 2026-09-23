@@ -2,8 +2,9 @@ name: Crypto bot
 
 on:
   schedule:
-    # Every 30 minutes, 24/7 (crypto never closes). GitHub may start runs a few minutes late.
-    - cron: "7,37 * * * *"
+    # Every 15 minutes, 24/7 (crypto never closes). Needs a PUBLIC repo for unlimited free minutes.
+    # GitHub may start runs a few minutes late or occasionally skip one when busy.
+    - cron: "2,17,32,47 * * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -32,7 +33,9 @@ jobs:
           DRY_RUN: ${{ vars.CRYPTO_DRY_RUN || 'true' }}
           BOT_BUDGET: ${{ vars.CRYPTO_BUDGET || '100' }}
           NOTIFY_EVERY_RUN: ${{ vars.CRYPTO_NOTIFY_EVERY_RUN || 'false' }}
-          CRYPTO_SYMBOLS: ${{ vars.CRYPTO_SYMBOLS || 'BTC/USD,ETH/USD,SOL/USD' }}
+          CRYPTO_SYMBOLS: ${{ vars.CRYPTO_SYMBOLS }}
+          CRYPTO_RISK: ${{ vars.CRYPTO_RISK || 'normal' }}
+          CRYPTO_SPEED: ${{ vars.CRYPTO_SPEED || 'turbo' }}
         run: python crypto_bot.py
       - name: Save trade log and state
         if: always()
