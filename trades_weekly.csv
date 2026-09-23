@@ -1,4 +1,0 @@
-timestamp_et,mode,action,symbol,qty,price,note
-2026-09-23T11:06:58-04:00,LIVE-paper,sell_put,IWM261001P00276000,1,0.70,"8d, delta 0.16, strike $276, IV 19% vs RV 12%"
-2026-09-23T11:06:59-04:00,LIVE-paper,sell_put,TLT261002P00078500,5,0.10,"9d, delta 0.11, strike $78.5, IV 15% vs RV 9%, downtrend"
-2026-09-23T11:06:59-04:00,LIVE-paper,sell_put,XLF261002P00053500,3,0.13,"9d, delta 0.17, strike $53.5, IV 17% vs RV 13%"
