@@ -12,7 +12,15 @@
  "fees": 2.4077091587016617,
  "last_daily": "2026-09-26",
  "losses": 6,
- "orders": {},
+ "orders": {
+  "SOL/USD": {
+   "booked": 0.0,
+   "id": "709472c3-9816-426e-85dd-fc4f5cc26b84",
+   "notional": 91.83769530184449,
+   "qty": 0.739973131,
+   "side": "buy"
+  }
+ },
  "pos": {},
  "realized": -7.902832618612052,
  "wins": 0
