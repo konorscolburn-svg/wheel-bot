@@ -12,7 +12,15 @@
  "fees": 2.8637604731275865,
  "last_daily": "2026-09-27",
  "losses": 7,
- "orders": {},
+ "orders": {
+  "BTC/USD": {
+   "booked": 0.0,
+   "id": "ba098e9d-131d-4aa6-b607-123d33d4210b",
+   "notional": 90.1582706052,
+   "qty": 0.001074318,
+   "side": "buy"
+  }
+ },
  "pos": {},
  "realized": -9.599689276867977,
  "wins": 0
