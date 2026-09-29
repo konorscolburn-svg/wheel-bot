@@ -12,7 +12,15 @@
  "fees": 3.312774216077697,
  "last_daily": "2026-09-28",
  "losses": 8,
- "orders": {},
+ "orders": {
+  "ETH/USD": {
+   "booked": 0.0,
+   "id": "a9b0b33e-1d9d-4a0b-bcc1-7241355f7122",
+   "notional": 89.01390207313,
+   "qty": 0.032838485,
+   "side": "buy"
+  }
+ },
  "pos": {},
  "realized": -10.75714437797437,
  "wins": 0
