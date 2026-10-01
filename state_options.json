@@ -1,0 +1,13 @@
+{
+ "cash": 2.0,
+ "losses": 0,
+ "order": null,
+ "pos": {
+  "entry": 0.98,
+  "opened": "2026-10-01T14:48:53.641517+00:00",
+  "qty": 1,
+  "symbol": "IWM261006P00272000"
+ },
+ "realized": 0.0,
+ "wins": 0
+}
