@@ -49,7 +49,7 @@ from alpaca.data.requests import CryptoBarsRequest, CryptoLatestQuoteRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.trading.requests import LimitOrderRequest
+from alpaca.trading.requests import LimitOrderRequest, StopLimitOrderRequest
 
 ET = ZoneInfo("America/New_York")
 
@@ -118,6 +118,15 @@ def event(m):
 def alert(m):
     event("⚠️ " + m)
     alerts.append(m)
+
+
+def px(p):
+    """Readable price for both $80,000 BTC and $0.00001 meme coins."""
+    if p >= 1:
+        return f"${p:,.2f}"
+    if p >= 0.01:
+        return f"${p:.4f}"
+    return f"${p:.8f}"
 
 
 def ema(values, n):
@@ -198,7 +207,7 @@ def apply_fill(s, sym, side, qty, price):
         p["entry"] = p["cost"] / p["qty"]
         p["peak"] = max(p.get("peak", price), price)
         s["cash"] -= qty * price + fee
-        event(f"🟢 BOUGHT {qty:.6f} {sym} @ ${price:,.2f} (fee ≈ ${fee:.2f})")
+        event(f"🟢 BOUGHT {qty:.6f} {sym} @ {px(price)} (fee ≈ ${fee:.2f})")
         log("buy", sym, qty, price, f"fee {fee:.4f}")
     else:
         p = s["pos"].get(sym)
@@ -215,7 +224,7 @@ def apply_fill(s, sym, side, qty, price):
         p["cost"] -= cost_part
         if p["qty"] <= 1e-9:
             del s["pos"][sym]
-        event(f"🔴 SOLD {qty:.6f} {sym} @ ${price:,.2f}: {pnl:+.2f} after fees")
+        event(f"🔴 SOLD {qty:.6f} {sym} @ {px(price)}: {pnl:+.2f} after fees")
         log("sell", sym, qty, price, f"P/L {pnl:+.4f}; fee {fee:.4f}")
 
 
@@ -274,7 +283,12 @@ def place(trading, s, sym, side, qty, quote, urgent, info):
     if qty <= 0 or qty * price < 1:
         say(f"{sym}: order too small, skipped.")
         return
-    say(f"{sym}: {side.upper()} {qty:.6f} @ ${price:,.2f} ({style})")
+    if side == "sell":
+        cancel_stop(trading, s, sym)  # free up the coins held by the resting stop
+        if sym not in s["pos"]:
+            return  # the stop already sold it
+        qty = min(qty, s["pos"][sym]["qty"])
+    say(f"{sym}: {side.upper()} {qty:.6f} @ {px(price)} ({style})")
     if DRY_RUN:
         apply_fill(s, sym, side, qty, price)
         return
@@ -291,6 +305,85 @@ def place(trading, s, sym, side, qty, quote, urgent, info):
         alert(f"Order failed for {sym}: {e}")
 
 
+
+# ------------------------- protective stops on Alpaca -------------------------
+# A stop-limit sell order rests on Alpaca's servers and triggers the moment price hits the
+# stop, 24/7, even between bot runs. The bot only raises it (trailing), never lowers it.
+STOP_SLIP = 0.01          # limit price 1% below the stop so it fills even in a fast drop
+STOP_MOVE_MIN = 0.003     # only re-place the stop if it would move up by 0.3%+ (avoids churn)
+
+
+def cancel_stop(trading, s, sym):
+    st = s.setdefault("stops", {}).pop(sym, None)
+    if st and not DRY_RUN:
+        try:
+            trading.cancel_order_by_id(st["id"])
+            _time.sleep(1.5)
+        except Exception:
+            pass
+        settle_one_stop(trading, s, sym, st)
+
+
+def settle_one_stop(trading, s, sym, st):
+    """Book any fill from a protective stop. Returns True if it is still open."""
+    try:
+        od = trading.get_order_by_id(st["id"])
+    except Exception:
+        return True
+    filled = float(od.filled_qty or 0)
+    if filled > st.get("booked", 0) and od.filled_avg_price and sym in s["pos"]:
+        apply_fill(s, sym, "sell", filled - st.get("booked", 0), float(od.filled_avg_price))
+        st["booked"] = filled
+        say(f"   reason: protective stop triggered on Alpaca at {px(st['stop'])}")
+        s.setdefault("cooldown", {})[sym] = (datetime.now(timezone.utc) + timedelta(hours=COOLDOWN_H)).isoformat()
+    status = str(od.status.value if hasattr(od.status, "value") else od.status)
+    return status not in ("filled", "canceled", "expired", "rejected", "done_for_day")
+
+
+def settle_stops(trading, s):
+    if DRY_RUN:
+        return
+    for sym, st in list(s.setdefault("stops", {}).items()):
+        still_open = settle_one_stop(trading, s, sym, st)
+        if not still_open:
+            s["stops"].pop(sym, None)
+        elif sym not in s["pos"]:
+            cancel_stop(trading, s, sym)
+
+
+def ensure_stop(trading, s, sym, level, info):
+    """Place or raise the resting stop for a held coin."""
+    if DRY_RUN or sym not in s["pos"] or sym in s.get("orders", {}):
+        return
+    cur = s.setdefault("stops", {}).get(sym)
+    if cur and level < cur["stop"] * (1 + STOP_MOVE_MIN):
+        return  # never lower a stop; skip tiny raises
+    if cur:
+        cancel_stop(trading, s, sym)
+        if sym not in s["pos"]:
+            return  # it filled while we were cancelling
+    qty = s["pos"][sym]["qty"]
+    try:
+        held = float(trading.get_open_position(sym.replace("/", "")).qty)
+        qty = min(qty, held)
+    except Exception:
+        pass
+    qty = round_to(qty, info.get("qinc"))
+    stop_px = round_to(level, info.get("pinc"))
+    limit_px = round_to(level * (1 - STOP_SLIP), info.get("pinc"))
+    if qty <= 0 or stop_px <= 0:
+        return
+    try:
+        o = trading.submit_order(StopLimitOrderRequest(
+            symbol=sym, qty=qty, side=OrderSide.SELL, time_in_force=TimeInForce.GTC,
+            stop_price=stop_px, limit_price=limit_px,
+            client_order_id=f"{TAG}s-{sym.replace('/', '')}-{datetime.now().strftime('%H%M%S%f')}"))
+        s["stops"][sym] = {"id": str(o.id), "stop": stop_px, "qty": qty, "booked": 0.0}
+        say(f"   🛡️ protective stop set on Alpaca at {px(stop_px)}")
+    except Exception as e:
+        say(f"   (couldn't place protective stop for {sym}: {e})")
+
+
 # ---------------------------------- main ----------------------------------
 def run(trading, cdata):
     s = load_state()
@@ -305,7 +398,9 @@ def _run(trading, cdata, s):
     say(f"{'PAPER' if PAPER else 'REAL MONEY'} | {'DRY RUN' if DRY_RUN else 'LIVE ORDERS'} | risk {RISK} | speed {SPEED} | {now:%a %b %d %I:%M %p} ET")
     s.setdefault("orders", {})
     s.setdefault("attempts", {})
+    s.setdefault("stops", {})
     settle_orders(trading, s)
+    settle_stops(trading, s)
 
     tf = TimeFrame(15, TimeFrameUnit.Minute) if TURBO else TimeFrame.Hour
     lookback = timedelta(days=6) if TURBO else timedelta(days=30)
@@ -360,7 +455,9 @@ def _run(trading, cdata, s):
             elif f < sl * (1 - BUFFER):
                 place(trading, s, sym, "sell", pos["qty"], q, False, info[sym]); say("   reason: trend turned down")
             else:
-                say(f"{sym}: holding, {chg:+.2%} vs entry, stop ${trail:,.0f}")
+                level = max(trail, pos["entry"] * (1 - HARD_STOP))
+                say(f"{sym}: holding, {chg:+.2%} vs entry, stop ${level:,.2f}")
+                ensure_stop(trading, s, sym, level, info[sym])
         else:
             up = f > sl * (1 + BUFFER) and px > tr and (a / px) >= MIN_ATR_PCT
             cd = s.get("cooldown", {}).get(sym)
