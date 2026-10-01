@@ -2,8 +2,8 @@ name: Options bot
 
 on:
   schedule:
-    # Every 30 minutes during market hours (covers both summer and winter time; the bot skips closed hours)
-    - cron: "15,45 13-20 * * 1-5"
+    # Every 30 minutes, ~1 min after :00 and :30 (the research decision times). Covers summer and winter; the bot skips closed hours.
+    - cron: "1,31 14-20 * * 1-5"
   workflow_dispatch: {}
 
 permissions:
