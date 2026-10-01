@@ -1,5 +1,7 @@
 {
  "cash": 2.0,
+ "day": "2026-10-01",
+ "entries_today": 0,
  "losses": 0,
  "order": null,
  "pos": {
@@ -9,5 +11,6 @@
   "symbol": "IWM261006P00272000"
  },
  "realized": 0.0,
+ "retry": 0,
  "wins": 0
 }
