@@ -1,0 +1,43 @@
+name: Meme bot
+
+on:
+  schedule:
+    # Every 15 minutes, 24/7 (offset from the crypto bot so they don't collide)
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bots-git
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install "alpaca-py>=0.44"
+      - name: Run bot
+        env:
+          ALPACA_API_KEY: ${{ secrets.LOTTERY_ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.LOTTERY_ALPACA_SECRET_KEY }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          DRY_RUN: ${{ vars.MEME_DRY_RUN || 'true' }}
+          BOT_BUDGET: ${{ vars.MEME_BUDGET || '100' }}
+          NOTIFY_EVERY_RUN: ${{ vars.MEME_NOTIFY_EVERY_RUN || 'false' }}
+        run: python meme_bot.py
+      - name: Save trade log and state
+        if: always()
+        run: |
+          git config user.name "meme-bot"
+          git config user.email "meme-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "Meme bot run $(date -u +%F-%H%M)" || true
+          git pull --rebase || true
+          git push || true

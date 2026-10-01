@@ -1,0 +1,43 @@
+name: Options bot
+
+on:
+  schedule:
+    # Every 30 minutes during market hours (covers both summer and winter time; the bot skips closed hours)
+    - cron: "15,45 13-20 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bots-git
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install "alpaca-py>=0.44"
+      - name: Run bot
+        env:
+          ALPACA_API_KEY: ${{ secrets.LOTTERY_ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.LOTTERY_ALPACA_SECRET_KEY }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          DRY_RUN: ${{ vars.OPT_DRY_RUN || 'true' }}
+          BOT_BUDGET: ${{ vars.OPT_BUDGET || '100' }}
+          NOTIFY_EVERY_RUN: ${{ vars.OPT_NOTIFY_EVERY_RUN || 'false' }}
+        run: python options_bot.py
+      - name: Save trade log and state
+        if: always()
+        run: |
+          git config user.name "options-bot"
+          git config user.email "options-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "Options bot run $(date -u +%F-%H%M)" || true
+          git pull --rebase || true
+          git push || true
