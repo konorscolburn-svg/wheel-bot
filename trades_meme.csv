@@ -1,2 +1,3 @@
 timestamp_et,mode,action,symbol,qty,price,note
 2026-10-02T06:01:52-04:00,LIVE-paper,buy,TRUMP/USD,23.46065196,2.13,fee 0.1246
+2026-10-02T16:49:35-04:00,LIVE-paper,sell,TRUMP/USD,23.40200033,2.06,P/L -1.7770; fee 0.1205
